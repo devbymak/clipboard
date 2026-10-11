@@ -96,6 +96,78 @@ final class TIFFProvider: NSObject, NSPasteboardItemDataProvider {
     }
 }
 
+/// Watches a folder for new screenshots. macOS saves ⇧⌘3 and ⇧⌘4 screenshots as files, not to the clipboard, and the
+/// sandbox lets Clipdan read only the folder chosen in Settings.
+final class ScreenshotWatcher {
+    private let folder: URL
+    private let accessing: Bool
+    private let started = Date()
+    private let onScreenshot: (CapturedImage, Date) -> Void
+    private let queue = DispatchQueue(label: "local.clipdan.screenshots", qos: .userInitiated)
+    private var source: DispatchSourceFileSystemObject?
+    /// Files already looked at, by name. Changed on `queue` only, once watching starts.
+    private var seen: Set<String> = []
+    /// Sizes of new files at the last look. A file is read once its size stops changing, so never half-written.
+    private var sizes: [String: Int] = [:]
+    private var rescanning = false
+    private static let keys: [URLResourceKey] = [.contentTypeKey, .fileSizeKey, .creationDateKey]
+
+    /// Nil when the folder can't be read.
+    init?(folder: URL, onScreenshot: @escaping (CapturedImage, Date) -> Void) {
+        self.folder = folder
+        self.onScreenshot = onScreenshot
+        accessing = folder.startAccessingSecurityScopedResource()
+        let descriptor = open(folder.path, O_EVTONLY)
+        guard descriptor >= 0, let files = try? FileManager.default.contentsOfDirectory(atPath: folder.path) else {
+            if descriptor >= 0 { close(descriptor) }
+            if accessing { folder.stopAccessingSecurityScopedResource() }
+            return nil
+        }
+        seen = Set(files)
+        let source = DispatchSource.makeFileSystemObjectSource(fileDescriptor: descriptor, eventMask: .write, queue: queue)
+        source.setEventHandler { [weak self] in self?.scan() }
+        source.setCancelHandler { close(descriptor) }
+        source.resume()
+        self.source = source
+    }
+    deinit {
+        source?.cancel()
+        if accessing { folder.stopAccessingSecurityScopedResource() }
+    }
+
+    private func scan() {
+        // Hidden files are skipped: macOS writes a screenshot under a hidden name first.
+        guard let files = try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: Self.keys,
+                                                                         options: .skipsHiddenFiles) else { return }
+        var waiting = false
+        for file in files where !seen.contains(file.lastPathComponent) {
+            let name = file.lastPathComponent
+            let values = try? file.resourceValues(forKeys: Set(Self.keys))
+            let created = values?.creationDate ?? .distantPast, size = values?.fileSize ?? 0
+            // Older files moved into the folder, other pictures, and screen recordings are left alone.
+            guard created >= started, values?.contentType?.conforms(to: .image) == true, size <= Capture.imageLimit,
+                  Screenshots.isScreenshot(file) else {
+                // macOS may mark a screenshot a moment after saving it.
+                if Date().timeIntervalSince(created) < 10 { waiting = true } else { seen.insert(name) }
+                continue
+            }
+            guard sizes[name] == size else { sizes[name] = size; waiting = true; continue }
+            seen.insert(name)
+            sizes[name] = nil
+            guard let data = try? Data(contentsOf: file), let image = CapturedImage(data: data) else { continue }
+            DispatchQueue.main.async { [onScreenshot] in onScreenshot(image, created) }
+        }
+        // Names of deleted files are forgotten, so a new screenshot by the same name is copied too.
+        let names = Set(files.map(\.lastPathComponent))
+        seen.formIntersection(names)
+        sizes = sizes.filter { names.contains($0.key) }
+        if waiting, !rescanning {
+            rescanning = true
+            queue.asyncAfter(deadline: .now() + 0.5) { [weak self] in self?.rescanning = false; self?.scan() }
+        }
+    }
+}
+
 final class ClipModel: ObservableObject {
     /// Inside the sandbox container: ~/Library/Containers/local.clipdan/Data/Library/Application Support/Clipdan.
     static let folder = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -154,6 +226,10 @@ final class ClipModel: ObservableObject {
     @Published var sticky = UserDefaults.standard.object(forKey: "sticky") as? Bool ?? true {
         didSet { defaults.set(sticky, forKey: "sticky") }
     }
+    /// Copies each new screenshot to the clipboard. Needs a folder to watch, chosen in Settings.
+    @Published private(set) var copiesScreenshots = UserDefaults.standard.bool(forKey: "copiesScreenshots")
+    @Published private(set) var screenshotFolder = ClipModel.savedScreenshotFolder()
+    @Published private(set) var screenshotError: String?
     /// While paused, copies are not kept.
     @Published var paused = UserDefaults.standard.bool(forKey: "paused") {
         didSet { defaults.set(paused, forKey: "paused"); onChange?() }
@@ -184,6 +260,7 @@ final class ClipModel: ObservableObject {
     private var pendingImageBytes = 0
     private let thumbnails = NSCache<NSString, NSImage>()
     private var tiffProvider: TIFFProvider?
+    private var screenshots: ScreenshotWatcher?
 
     init() {
         let saves = UserDefaults.standard.object(forKey: "savesHistory") as? Bool ?? true
@@ -208,6 +285,7 @@ final class ClipModel: ObservableObject {
         RunLoop.main.add(timer, forMode: .common)
         self.timer = timer
         checkPasteboard()
+        watchScreenshots()
     }
     func registerShortcut() {
         shortcutError = hotKey.register(shortcut) ? nil
@@ -317,11 +395,17 @@ final class ClipModel: ObservableObject {
             item.setString(clip.text, forType: .string)
         case .image:
             guard let png = store.image(for: clip.id) else { return false }
-            item.setData(png, forType: .png)
-            let provider = TIFFProvider(png: png)
-            tiffProvider = provider  // The pasteboard doesn't keep it.
-            item.setDataProvider(provider, forTypes: [.tiff])
+            setImage(png, on: item)
         }
+        return write(item)
+    }
+    private func setImage(_ png: Data, on item: NSPasteboardItem) {
+        item.setData(png, forType: .png)
+        let provider = TIFFProvider(png: png)
+        tiffProvider = provider  // The pasteboard doesn't keep it.
+        item.setDataProvider(provider, forTypes: [.tiff])
+    }
+    private func write(_ item: NSPasteboardItem) -> Bool {
         item.setData(Data(), forType: NSPasteboard.PasteboardType(Capture.ownType))
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
@@ -351,6 +435,60 @@ final class ClipModel: ObservableObject {
         return thumbnail
     }
     var imageCount: Int { history.clips.filter { $0.kind == .image }.count }
+
+    // MARK: Screenshots
+
+    /// Turning it on the first time asks for the folder; it stays off if none is chosen.
+    func setCopiesScreenshots(_ on: Bool) {
+        if on, screenshotFolder == nil, !chooseScreenshotFolder() { return }
+        copiesScreenshots = on
+        defaults.set(on, forKey: "copiesScreenshots")
+        watchScreenshots()
+    }
+    /// The sandbox lets Clipdan read a folder outside its container only once it's chosen here. A bookmark keeps that
+    /// access, read-only, across launches.
+    @discardableResult func chooseScreenshotFolder() -> Bool {
+        NSApp.activate(ignoringOtherApps: true)
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.directoryURL = screenshotFolder ?? Screenshots.standardFolder
+        panel.message = "Choose the folder your screenshots are saved in. It's the Desktop unless you changed it in the Screenshot app (⇧⌘5) → Options."
+        panel.prompt = "Choose"
+        guard panel.runModal() == .OK, let folder = panel.url,
+              let bookmark = try? folder.bookmarkData(options: [.withSecurityScope, .securityScopeAllowOnlyReadAccess]) else { return false }
+        defaults.set(bookmark, forKey: "screenshotFolder")
+        screenshotFolder = folder
+        watchScreenshots()
+        return true
+    }
+    private static func savedScreenshotFolder() -> URL? {
+        guard let bookmark = UserDefaults.standard.data(forKey: "screenshotFolder") else { return nil }
+        var stale = false
+        guard let folder = try? URL(resolvingBookmarkData: bookmark, options: .withSecurityScope, bookmarkDataIsStale: &stale) else { return nil }
+        if stale, folder.startAccessingSecurityScopedResource() {
+            defer { folder.stopAccessingSecurityScopedResource() }
+            if let fresh = try? folder.bookmarkData(options: [.withSecurityScope, .securityScopeAllowOnlyReadAccess]) {
+                UserDefaults.standard.set(fresh, forKey: "screenshotFolder")
+            }
+        }
+        return folder
+    }
+    private func watchScreenshots() {
+        screenshots = nil
+        screenshotError = nil
+        guard copiesScreenshots, let folder = screenshotFolder else { return }
+        screenshots = ScreenshotWatcher(folder: folder) { [weak self] image, date in self?.copyScreenshot(image, date: date) }
+        if screenshots == nil { screenshotError = "Clipdan can't read the \(folder.lastPathComponent) folder. Choose it again." }
+    }
+    /// Puts a new screenshot on the clipboard, and in the history unless paused.
+    private func copyScreenshot(_ image: CapturedImage, date: Date) {
+        let item = NSPasteboardItem()
+        setImage(image.png, on: item)
+        guard write(item), !paused else { return }
+        add(.image(image, source: "Screenshot", date: date), png: image.png)
+    }
 
     // MARK: Permissions
 
@@ -789,6 +927,27 @@ struct SettingsView: View {
             if model.pastesAutomatically, !model.accessibilityAllowed {
                 footer("Clipdan needs Accessibility permission to press ⌘V for you. Turn on Clipdan in System Settings → Privacy & Security → Accessibility. After you rebuild Clipdan, remove it from that list and add it again.")
             }
+        }
+        Section {
+            // Asynchronously, since turning it on can open a folder panel.
+            Toggle(isOn: Binding(get: { model.copiesScreenshots },
+                                 set: { on in DispatchQueue.main.async { model.setCopiesScreenshots(on) } })) {
+                Text("Copy screenshots to the clipboard")
+                Text("Screenshots you take with ⇧⌘3 or ⇧⌘4 are copied, ready to paste, and still saved as files.")
+            }
+            if model.copiesScreenshots, let folder = model.screenshotFolder {
+                LabeledContent("Folder") {
+                    HStack {
+                        Text(folder.lastPathComponent).foregroundStyle(.secondary)
+                        Button("Change…") { model.chooseScreenshotFolder() }
+                    }
+                }
+            }
+            if let error = model.screenshotError { warning(error) }
+        } header: {
+            Text("Screenshots")
+        } footer: {
+            footer("Clipdan reads only the folder you choose, where macOS saves your screenshots. To copy a screenshot without saving it, add ⌃, as in ⌃⇧⌘4.")
         }
         if model.clipboardAccess != .unknown {
             Section {

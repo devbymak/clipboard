@@ -29,12 +29,15 @@ cat > 'Clipdan.app/Contents/Info.plist' <<'PLIST'
 <key>LSUIElement</key><true/>
 </dict></plist>
 PLIST
-# App Sandbox with no entitlements beyond it: no network, and no file access outside its own container.
+# App Sandbox: no network, and no file access outside its own container except read-only access to a folder chosen in
+# Settings (the screenshots folder), kept across launches by a bookmark.
 cat > .build/clipdan.entitlements <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
 <key>com.apple.security.app-sandbox</key><true/>
+<key>com.apple.security.files.user-selected.read-only</key><true/>
+<key>com.apple.security.files.bookmarks.app-scope</key><true/>
 </dict></plist>
 PLIST
 # Ad-hoc by default, which runs only on this Mac. To share the app, set CLIPDAN_SIGN_IDENTITY to a Developer ID

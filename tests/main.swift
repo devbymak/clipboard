@@ -153,6 +153,15 @@ check(memoryStore.image(for: imageClip.id) == nil, "Removed images are released"
 try Data("{broken".utf8).write(to: { try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true); return folder.appendingPathComponent("history.json") }())
 check(ClipStore(folder: folder).load().isEmpty, "A corrupt history loads as empty instead of crashing")
 
+// Screenshots
+let shot = folder.appendingPathComponent("Screenshot.png"), picture = folder.appendingPathComponent("Picture.png")
+try png.write(to: shot); try png.write(to: picture)
+let yes = Data([0x62, 0x70, 0x6C, 0x69, 0x73, 0x74])  // Any value: only the attribute's presence counts.
+_ = yes.withUnsafeBytes { setxattr(shot.path, Screenshots.marker, $0.baseAddress, yes.count, 0, 0) }
+check(Screenshots.isScreenshot(shot) && !Screenshots.isScreenshot(picture), "Screenshots are told apart by macOS's marker")
+check(Screenshots.standardFolder.path.hasSuffix("/Desktop") && !Screenshots.standardFolder.path.contains("/Containers/"),
+      "Screenshots are looked for on the real Desktop")
+
 // Shortcuts
 check(Shortcut.standard.title() == "⇧⌘V" && Shortcut.standard.carbonModifiers == 768, "⌘⇧V, as macOS writes it")
 check(Shortcut(keyCode: 9, modifiers: [.control, .option, .shift, .command]).modifierSymbols == "⌃⌥⇧⌘", "Modifier order")

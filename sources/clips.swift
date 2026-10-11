@@ -221,6 +221,21 @@ struct CapturedImage: Equatable {
     }
 }
 
+/// Screenshots macOS saves as files, with ⇧⌘3 and ⇧⌘4.
+enum Screenshots {
+    /// macOS marks each screenshot file with this extended attribute.
+    static let marker = "com.apple.metadata:kMDItemIsScreenCapture"
+    /// Where macOS saves them unless told otherwise: the real Desktop, not the one inside the sandbox container.
+    static var standardFolder: URL {
+        let home = getpwuid(getuid()).map { String(cString: $0.pointee.pw_dir) } ?? NSHomeDirectory()
+        return URL(fileURLWithPath: home, isDirectory: true).appendingPathComponent("Desktop", isDirectory: true)
+    }
+    /// Whether macOS marked the file as a screenshot. Any other picture saved in the folder is left alone.
+    static func isScreenshot(_ file: URL) -> Bool {
+        getxattr(file.path, marker, nil, 0, 0, XATTR_NOFOLLOW) >= 0
+    }
+}
+
 /// Saves clippings in one folder: the list in `history.json`, and each image as a PNG beside it.
 /// With saving off, image data stays in memory and nothing is written.
 final class ClipStore {
