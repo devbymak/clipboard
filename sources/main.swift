@@ -147,8 +147,9 @@ final class ScreenshotWatcher {
             // Older files moved into the folder, other pictures, and screen recordings are left alone.
             guard created >= started, values?.contentType?.conforms(to: .image) == true, size <= Capture.imageLimit,
                   Screenshots.isScreenshot(file) else {
-                // macOS may mark a screenshot a moment after saving it.
-                if Date().timeIntervalSince(created) < 10 { waiting = true } else { seen.insert(name) }
+                // macOS may mark a screenshot a moment after saving it. A file dated in the future, as from a camera whose
+                // clock is ahead, is not waited for, or it would be looked at again twice a second until that date.
+                if (0..<10).contains(Date().timeIntervalSince(created)) { waiting = true } else { seen.insert(name) }
                 continue
             }
             guard sizes[name] == size else { sizes[name] = size; waiting = true; continue }
@@ -504,9 +505,11 @@ final class ClipModel: ObservableObject {
     }
     /// macOS can ask before an app reads the clipboard. Clipdan needs "Always Allow" to keep clippings.
     @Published private(set) var clipboardAccess = ClipboardAccess.current
+    /// Settings calls this every second. Each assignment redraws every view that watches the model, so only changes are.
     func refreshPermissions() {
-        accessibilityAllowed = AXIsProcessTrusted()
-        clipboardAccess = .current
+        let allowed = AXIsProcessTrusted(), access = ClipboardAccess.current
+        if accessibilityAllowed != allowed { accessibilityAllowed = allowed }
+        if clipboardAccess != access { clipboardAccess = access }
     }
 
     // MARK: Launch at login
