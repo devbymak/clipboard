@@ -97,13 +97,13 @@ final class TIFFProvider: NSObject, NSPasteboardItemDataProvider {
 }
 
 /// Watches a folder for new screenshots. macOS saves ⇧⌘3 and ⇧⌘4 screenshots as files, not to the clipboard, and the
-/// sandbox lets Clipdan read only the folder chosen in Settings.
+/// sandbox lets Clipboard read only the folder chosen in Settings.
 final class ScreenshotWatcher {
     private let folder: URL
     private let accessing: Bool
     private let started = Date()
     private let onScreenshot: (CapturedImage, Date) -> Void
-    private let queue = DispatchQueue(label: "local.clipdan.screenshots", qos: .userInitiated)
+    private let queue = DispatchQueue(label: "local.clipboard.screenshots", qos: .userInitiated)
     private var source: DispatchSourceFileSystemObject?
     /// Files already looked at, by name. Changed on `queue` only, once watching starts.
     private var seen: Set<String> = []
@@ -170,9 +170,9 @@ final class ScreenshotWatcher {
 }
 
 final class ClipModel: ObservableObject {
-    /// Inside the sandbox container: ~/Library/Containers/local.clipdan/Data/Library/Application Support/Clipdan.
+    /// Inside the sandbox container: ~/Library/Containers/local.clipboard/Data/Library/Application Support/Clipboard.
     static let folder = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        .appendingPathComponent("Clipdan", isDirectory: true)
+        .appendingPathComponent("Clipboard", isDirectory: true)
     static let menuCountChoices = [5, 10, 15, 20, 30, 40]
 
     @Published private(set) var history: ClipHistory
@@ -253,10 +253,10 @@ final class ClipModel: ObservableObject {
     private let hotKey = HotKey()
     private var timer: Timer?
     private var lastChangeCount = -1
-    /// The change count of Clipdan's own last write, which is not captured again.
+    /// The change count of Clipboard's own last write, which is not captured again.
     private var ownChangeCount = -1
     /// Captures go through one queue so they're added in the order they were copied, even when an image takes a moment.
-    private let captureQueue = DispatchQueue(label: "local.clipdan.capture", qos: .userInitiated)
+    private let captureQueue = DispatchQueue(label: "local.clipboard.capture", qos: .userInitiated)
     /// Bytes of copied images waiting on the capture queue. Changed on the main thread only.
     private var pendingImageBytes = 0
     private let thumbnails = NSCache<NSString, NSImage>()
@@ -446,7 +446,7 @@ final class ClipModel: ObservableObject {
         defaults.set(on, forKey: "copiesScreenshots")
         watchScreenshots()
     }
-    /// The sandbox lets Clipdan read a folder outside its container only once it's chosen here. A bookmark keeps that
+    /// The sandbox lets Clipboard read a folder outside its container only once it's chosen here. A bookmark keeps that
     /// access, read-only, across launches.
     @discardableResult func chooseScreenshotFolder() -> Bool {
         NSApp.activate(ignoringOtherApps: true)
@@ -481,7 +481,7 @@ final class ClipModel: ObservableObject {
         screenshotError = nil
         guard copiesScreenshots, let folder = screenshotFolder else { return }
         screenshots = ScreenshotWatcher(folder: folder) { [weak self] image, date in self?.copyScreenshot(image, date: date) }
-        if screenshots == nil { screenshotError = "Clipdan can't read the \(folder.lastPathComponent) folder. Choose it again." }
+        if screenshots == nil { screenshotError = "Clipboard can't read the \(folder.lastPathComponent) folder. Choose it again." }
     }
     /// Puts a new screenshot on the clipboard, and in the history unless paused.
     private func copyScreenshot(_ image: CapturedImage, date: Date) {
@@ -503,7 +503,7 @@ final class ClipModel: ObservableObject {
         let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
         accessibilityAllowed = AXIsProcessTrustedWithOptions(options)
     }
-    /// macOS can ask before an app reads the clipboard. Clipdan needs "Always Allow" to keep clippings.
+    /// macOS can ask before an app reads the clipboard. Clipboard needs "Always Allow" to keep clippings.
     @Published private(set) var clipboardAccess = ClipboardAccess.current
     /// Settings calls this every second. Each assignment redraws every view that watches the model, so only changes are.
     func refreshPermissions() {
@@ -641,7 +641,7 @@ struct BezelView: View {
         .foregroundStyle(.secondary)
     }
     private var counter: String {
-        guard !bezel.clips.isEmpty else { return bezel.query.isEmpty ? "Clipdan" : "0 of \(bezel.total)" }
+        guard !bezel.clips.isEmpty else { return bezel.query.isEmpty ? "Clipboard" : "0 of \(bezel.total)" }
         return "\(bezel.selection + 1) of \(bezel.clips.count)"
     }
     private var caption: String {
@@ -660,7 +660,7 @@ struct BezelView: View {
     }
 }
 
-/// A borderless panel that takes the keyboard without making Clipdan the active app, so the app underneath stays in front
+/// A borderless panel that takes the keyboard without making Clipboard the active app, so the app underneath stays in front
 /// and receives the paste.
 final class BezelPanel: NSPanel {
     override var canBecomeKey: Bool { true }
@@ -811,7 +811,7 @@ final class BezelController {
         host.autoresizingMask = [.width, .height]
         background.addSubview(host)
         panel.contentView = background
-        panel.setAccessibilityLabel("Clipdan clippings")
+        panel.setAccessibilityLabel("Clipboard clippings")
         return panel
     }
     /// The shortcut shown in the hints can change in Settings.
@@ -876,7 +876,7 @@ struct SettingsView: View {
         .frame(width: 480)
         .fixedSize(horizontal: false, vertical: true)
         .onAppear { model.refreshLoginItemStatus(); model.refreshPermissions() }
-        // Permissions change in System Settings, behind Clipdan's back.
+        // Permissions change in System Settings, behind Clipboard's back.
         .onReceive(refresh) { _ in model.refreshPermissions() }
     }
 
@@ -887,7 +887,7 @@ struct SettingsView: View {
                 set: { model.setLaunchAtLogin($0) }))
             if model.loginItemStatus == .requiresApproval {
                 HStack {
-                    Text("Allow Clipdan in Login Items to finish.").font(.caption).foregroundStyle(.orange)
+                    Text("Allow Clipboard in Login Items to finish.").font(.caption).foregroundStyle(.orange)
                     Spacer()
                     Button("Open Login Items") { SMAppService.openSystemSettingsLoginItems() }
                 }
@@ -917,7 +917,7 @@ struct SettingsView: View {
                         Text(model.accessibilityAllowed ? "Allowed" : "Not allowed")
                             .foregroundStyle(model.accessibilityAllowed ? Color.secondary : .orange)
                         if !model.accessibilityAllowed {
-                            // Asking first is what puts Clipdan in the list, so there's a switch to turn on.
+                            // Asking first is what puts Clipboard in the list, so there's a switch to turn on.
                             Button("Open Settings") { model.requestAccessibility(); SystemSettings.openAccessibility() }
                         }
                     }
@@ -928,7 +928,7 @@ struct SettingsView: View {
             Text("Pasting")
         } footer: {
             if model.pastesAutomatically, !model.accessibilityAllowed {
-                footer("Clipdan needs Accessibility permission to press ⌘V for you. Turn on Clipdan in System Settings → Privacy & Security → Accessibility. After you rebuild Clipdan, remove it from that list and add it again.")
+                footer("Clipboard needs Accessibility permission to press ⌘V for you. Turn on Clipboard in System Settings → Privacy & Security → Accessibility. After you rebuild Clipboard, remove it from that list and add it again.")
             }
         }
         Section {
@@ -950,7 +950,7 @@ struct SettingsView: View {
         } header: {
             Text("Screenshots")
         } footer: {
-            footer("Clipdan reads only the folder you choose, where macOS saves your screenshots. To copy a screenshot without saving it, add ⌃, as in ⌃⇧⌘4.")
+            footer("Clipboard reads only the folder you choose, where macOS saves your screenshots. To copy a screenshot without saving it, add ⌃, as in ⌃⇧⌘4.")
         }
         if model.clipboardAccess != .unknown {
             Section {
@@ -964,7 +964,7 @@ struct SettingsView: View {
                 Text("Clipboard Access")
             } footer: {
                 if model.clipboardAccess.isLimited {
-                    footer("macOS asks before Clipdan reads the clipboard. Allow Clipdan to paste from other apps in System Settings → Privacy & Security, or it can't keep your clippings.")
+                    footer("macOS asks before Clipboard reads what you copy. Allow Clipboard to paste from other apps in System Settings → Privacy & Security, or it can't keep your clippings.")
                 }
             }
         }
@@ -991,7 +991,7 @@ struct SettingsView: View {
             }
             Toggle(isOn: $model.savesHistory) {
                 Text("Save history")
-                Text("Keep clippings when Clipdan quits or your Mac restarts. Turning this off deletes the saved copy.")
+                Text("Keep clippings when Clipboard quits or your Mac restarts. Turning this off deletes the saved copy.")
             }
             LabeledContent("Kept") {
                 HStack {
@@ -1002,7 +1002,7 @@ struct SettingsView: View {
         } header: {
             Text("Storage")
         } footer: {
-            footer("When clippings take more space than the size limit, the oldest ones you haven't pinned are removed. Saved only on this Mac, in Clipdan's sandbox container. Passwords and other copies that apps mark as confidential are never kept. Clipdan has no network access and writes no logs.")
+            footer("When clippings take more space than the size limit, the oldest ones you haven't pinned are removed. Saved only on this Mac, in Clipboard's sandbox container. Passwords and other copies that apps mark as confidential are never kept. Clipboard has no network access and writes no logs.")
         }
     }
 
@@ -1089,8 +1089,8 @@ final class MenuApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
     static let titleLength = 48
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        item.button?.image = NSImage(systemSymbolName: "list.clipboard", accessibilityDescription: "Clipdan")
-        item.button?.setAccessibilityLabel("Clipdan clipboard history")
+        item.button?.image = NSImage(systemSymbolName: "list.clipboard", accessibilityDescription: "Clipboard")
+        item.button?.setAccessibilityLabel("Clipboard history")
         let menu = NSMenu()
         menu.delegate = self
         item.menu = menu
@@ -1104,7 +1104,7 @@ final class MenuApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var shortcutObservation: Any?
     private func refreshStatusItem() {
         item.button?.appearsDisabled = model.paused
-        item.button?.toolTip = model.paused ? "Clipdan is paused" : "Clipdan · \(model.shortcut.map(Keyboard.title) ?? "no shortcut")"
+        item.button?.toolTip = model.paused ? "Clipboard is paused" : "Clipboard · \(model.shortcut.map(Keyboard.title) ?? "no shortcut")"
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
@@ -1117,7 +1117,7 @@ final class MenuApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
             menu.addItem(entry)
         }
         if model.paused { note("Paused: new copies aren't kept") }
-        if model.clipboardAccess == .denied { note("Allow Clipdan to read the clipboard…", #selector(openPrivacy)) }
+        if model.clipboardAccess == .denied { note("Allow Clipboard to read what you copy…", #selector(openPrivacy)) }
         if let error = model.shortcutError { note(error) }
         if menu.numberOfItems > 0 { menu.addItem(.separator()) }
 
@@ -1148,7 +1148,7 @@ final class MenuApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let search = NSMenuItem(title: "Search Clippings…", action: #selector(search), keyEquivalent: "f")
         search.target = self
         menu.addItem(search)
-        let pause = NSMenuItem(title: "Pause Clipdan", action: #selector(togglePause), keyEquivalent: "")
+        let pause = NSMenuItem(title: "Pause Clipboard", action: #selector(togglePause), keyEquivalent: "")
         pause.target = self
         pause.state = model.paused ? .on : .off
         menu.addItem(pause)
@@ -1160,7 +1160,7 @@ final class MenuApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let settings = NSMenuItem(title: "Settings…", action: #selector(openSettings), keyEquivalent: ",")
         settings.target = self
         menu.addItem(settings)
-        let quit = NSMenuItem(title: "Quit Clipdan", action: #selector(quitApp), keyEquivalent: "q")
+        let quit = NSMenuItem(title: "Quit Clipboard", action: #selector(quitApp), keyEquivalent: "q")
         quit.target = self
         menu.addItem(quit)
         menu.autoenablesItems = false
@@ -1229,24 +1229,24 @@ if arguments.contains("--list") {
         print("\(String(format: "%3d", index + 1)). \(clip.pinned ? "📌 " : "")\(content)  (\(details))")
     }
 } else if arguments.contains("--probe") {
-    // Describes what's on the clipboard now, and what Clipdan would keep, without printing the content itself.
+    // Describes what's on the clipboard now, and what Clipboard would keep, without printing the content itself.
     let pasteboard = NSPasteboard.general
     let types = pasteboard.types?.map(\.rawValue) ?? []
     // Any app can name a type, so the names go through Format.line too.
     print("Types: \(types.map { Format.line($0, length: 200) }.joined(separator: ", "))")
     print("Clipboard access: \(ClipboardAccess.current.title)")
     switch Capture.decide(types: types, string: pasteboard.string(forType: .string), keepsImages: true) {
-    case .skip: print("Clipdan would skip this.")
-    case .text(let text): print("Clipdan would keep text: \(Format.count(text.count, "character")).")
+    case .skip: print("Clipboard would skip this.")
+    case .text(let text): print("Clipboard would keep text: \(Format.count(text.count, "character")).")
     case .image(let type):
         let image = pasteboard.data(forType: NSPasteboard.PasteboardType(type)).flatMap { CapturedImage(data: $0) }
-        print(image.map { "Clipdan would keep an image: \($0.width) × \($0.height), \(Format.bytes($0.png.count)) as PNG." }
-              ?? "Clipdan can't read this \(type) image.")
+        print(image.map { "Clipboard would keep an image: \($0.width) × \($0.height), \(Format.bytes($0.png.count)) as PNG." }
+              ?? "Clipboard can't read this \(type) image.")
     }
-} else if NSRunningApplication.runningApplications(withBundleIdentifier: "local.clipdan")
+} else if NSRunningApplication.runningApplications(withBundleIdentifier: "local.clipboard")
             .contains(where: { $0.processIdentifier != getpid() }) {
     // Two copies would add every copy twice and overwrite each other's history.
-    fputs("Clipdan is already running.\n", stderr)
+    fputs("Clipboard is already running.\n", stderr)
 } else {
     let app = NSApplication.shared
     let delegate = MenuApp()

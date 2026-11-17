@@ -135,9 +135,9 @@ enum Capture {
         "com.agilebits.onepassword", "de.petermaurer.TransientPasteboardType", "com.typeit4me.clipping",
         "Pasteboard generator type", ownType
     ]
-    /// Clipdan marks what it puts on the pasteboard, so pasting a clipping doesn't add it again.
-    static let ownType = "local.clipdan.clipping"
-    /// Image types Clipdan can keep, best first.
+    /// Clipboard marks what it puts on the pasteboard, so pasting a clipping doesn't add it again.
+    static let ownType = "local.clipboard.clipping"
+    /// Image types Clipboard can keep, best first.
     static let imageTypes = ["public.png", "public.tiff", "public.jpeg", "public.heic", "com.compuserve.gif", "com.microsoft.bmp"]
     static let fileURLType = "public.file-url"
     /// Longer text is not kept, so the saved history stays small enough to load at once.
@@ -189,7 +189,7 @@ struct CapturedImage: Equatable {
     /// smaller. PNG data is kept as it is. Returns nil for data that isn't such an image or is too large.
     init?(data: Data) {
         // Any app can put data on the pasteboard, and ImageIO reads dozens of formats whatever the data is labeled as.
-        // Only the formats Clipdan keeps are decoded, judged by the data itself, so rarer and riskier decoders never run.
+        // Only the formats Clipboard keeps are decoded, judged by the data itself, so rarer and riskier decoders never run.
         guard data.count <= Capture.imageLimit,
               let source = CGImageSourceCreateWithData(data as CFData, nil),
               let format = CGImageSourceGetType(source) as String?, Capture.imageTypes.contains(format),
@@ -241,7 +241,7 @@ enum Screenshots {
 final class ClipStore {
     private let folder: URL?
     private var memory: [UUID: Data] = [:]
-    private let queue = DispatchQueue(label: "local.clipdan.store")
+    private let queue = DispatchQueue(label: "local.clipboard.store")
     var saves: Bool { folder != nil }
     private var index: URL? { folder?.appendingPathComponent("history.json") }
     private var images: URL? { folder?.appendingPathComponent("images", isDirectory: true) }

@@ -40,7 +40,7 @@ check(Capture.decide(types: ["public.utf8-plain-text", "org.nspasteboard.Conceal
 check(Capture.decide(types: ["public.utf8-plain-text", "org.nspasteboard.TransientType"], string: "x", keepsImages: true) == .skip,
       "Temporary copies are skipped")
 check(Capture.decide(types: ["public.utf8-plain-text", Capture.ownType], string: "x", keepsImages: true) == .skip,
-      "Clipdan's own pastes are not added again")
+      "Clipboard's own pastes are not added again")
 check(Capture.decide(types: ["public.tiff"], string: nil, keepsImages: true) == .image(type: "public.tiff"), "A screenshot is kept as an image")
 check(Capture.decide(types: ["public.tiff", "public.png"], string: nil, keepsImages: true) == .image(type: "public.png"), "PNG is preferred")
 check(Capture.decide(types: ["public.tiff"], string: nil, keepsImages: false) == .skip, "Images can be turned off")
@@ -110,7 +110,7 @@ let jpeg = encodedImage(width: 8, height: 8, type: .jpeg)
 check(CapturedImage(data: jpeg).map { $0.png != jpeg && $0.png.starts(with: [0x89, 0x50, 0x4E, 0x47]) } == true,
       "The data, not its label, decides whether it's PNG, so JPEG labeled as PNG is converted")
 let jpeg2000 = encodedImage(width: 8, height: 8, type: UTType("public.jpeg-2000")!)
-check(!jpeg2000.isEmpty && CapturedImage(data: jpeg2000) == nil, "Formats Clipdan doesn't keep are never decoded")
+check(!jpeg2000.isEmpty && CapturedImage(data: jpeg2000) == nil, "Formats Clipboard doesn't keep are never decoded")
 let oversized = oversizedPNG()
 check(oversized.count < 1_000_000 && CapturedImage(data: oversized) == nil,
       "A small file holding too many pixels is rejected")
@@ -126,7 +126,7 @@ check(mixed.search("image 30").count == 2, "Images are found by their title")
 check(Clip.image(captured).imageTitle == "Image · 30 × 20", "Image title")
 
 // Saving
-let folder = FileManager.default.temporaryDirectory.appendingPathComponent("clipdan-tests-\(UUID().uuidString)")
+let folder = FileManager.default.temporaryDirectory.appendingPathComponent("clipboard-tests-\(UUID().uuidString)")
 defer { try? FileManager.default.removeItem(at: folder) }
 let store = ClipStore(folder: folder)
 var saved = ClipHistory(limit: 10)
